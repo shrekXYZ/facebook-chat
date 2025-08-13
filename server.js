@@ -12,7 +12,6 @@ app.use(express.json());
 app.use(cors());
 app.use(bodyParser.json());
 
-// Ruta de verificación (GET)
 app.get("/webhook", verifyWebhook);
 
 // Rutas de webhook
