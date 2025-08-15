@@ -1,4 +1,4 @@
-const fs = require("fs"); 
+const fs = require("fs");
 const path = require("path");
 const {
   templates,
@@ -6,12 +6,35 @@ const {
   enviarPlantillaErrorGenerico,
   enviarMensajeTexto,
 } = require("./whatsappTemplates");
+const db = require("./db");
 
 // Aliases para mayor claridad
 const sendTemplateMessage = enviarPlantillaWhatsApp;
 const sendTextMessage = enviarMensajeTexto;
 
+// Funciones para obtener datos desde la base de datos
+async function getCervezas() {
+  const [rows] = await db.query("SELECT id, nombre FROM cervezas WHERE activo=1");
+  return rows;
+}
 
+async function getPresentaciones(cervezaId) {
+  const [rows] = await db.query(
+    "SELECT volumen, precio FROM presentaciones WHERE cerveza_id=?",
+    [cervezaId]
+  );
+  return rows;
+}
+
+async function getPromociones() {
+  const [rows] = await db.query("SELECT descripcion FROM promociones WHERE activa=1");
+  return rows.map(r => r.descripcion);
+}
+
+async function getHorarios() {
+  const [rows] = await db.query("SELECT dia, horario FROM horarios");
+  return rows.map(r => `${r.dia}: ${r.horario}`);
+}
 
 async function handleIncomingMessage(payload) {
   // Log de la solicitud entrante para depuración
@@ -31,81 +54,100 @@ async function handleIncomingMessage(payload) {
   }
 
   const message = firstMessage;
-  console.log("\ud83d\udce9 Mensaje recibido:", message);
+  console.log("📩 Mensaje recibido:", message);
 
   if (!message.type) return;
-    const palabrasClaveSaludo = [
-      "hola", "hi", "buen día", "buenos días", "hello", "qué tal", "buenas tardes",
-      "buenas noches", "saludos", "hey", "cómo estás", "qué onda",
-    ];
+
   const from = message.from;
+  const body = message.text?.body?.toLowerCase() || "";
 
-  if (message.type === "text") {
-    const body = message.text?.body?.toLowerCase() || "";
-    if (body.includes(palabrasClaveSaludo)) {
-      await sendTemplateMessage(from, "menu_inicio");
-    }
-  } else if (message.type === "button" && message.button?.payload) {
+  // 1. Saludo inicial o palabras clave
+  const palabrasClaveSaludo = [
+    "hola", "hi", "buen día", "buenos días", "hello", "qué tal", "buenas tardes",
+    "buenas noches", "saludos", "hey", "cómo estás", "qué onda",
+  ];
+  if (palabrasClaveSaludo.some((palabra) => body.includes(palabra))) {
+    await sendTemplateMessage(from, templates.SALUDO_OPCIONES);
+    return;
+  }
+
+  // 2. Botones del menú principal
+  if (message.type === "button" && message.button?.payload) {
     const btnPayload = message.button.payload.toLowerCase();
-    if (btnPayload === "ver menu de hoy") {
-      await enviarPlantillaDesdeAPI({
-        url: "https://grp-ia.com/bitacora-residentes/menu.php",
-        templateName: "menu_hoy",
-        from,
-      });
-    } else if (btnPayload === "ver ofertas del dia") {
-      await enviarPlantillaDesdeAPI({
-        url: "https://grp-ia.com/bitacora-residentes/ofertas.php",
-        templateName: "ofertas_dia",
-        from,
-      });
-    } else if (btnPayload === "salir") {
-      await sendTextMessage(from, "¡Gracias por visitarnos!");
+    if (btnPayload.includes("cervezas")) {
+      const cervezas = await getCervezas();
+      let lista = cervezas.map((c, i) => `${i + 1} - ${c.nombre}`).join(' | ');
+      await sendTemplateMessage(from, templates.MARCAS_CERVEZAS, [lista]);
+      return;
+    }
+    if (btnPayload.includes("promociones")) {
+      const promos = await getPromociones();
+      await sendTemplateMessage(from, templates.PROMOCIONES, [promos.join(' | ')]);
+      return;
+    }
+    if (btnPayload.includes("horarios")) {
+      const horarios = await getHorarios();
+      await sendTemplateMessage(from, templates.HORARIOS, [horarios.join(' | ')]);
+      return;
+    }
+    if (btnPayload.includes("ver otra marca")) {
+      const cervezas = await getCervezas();
+      let lista = cervezas.map((c, i) => `${i + 1} - ${c.nombre}`).join(' | ');
+      await sendTemplateMessage(from, templates.MARCAS_CERVEZAS, [lista]);
+      return;
+    }
+    if (btnPayload.includes("volver al inicio") || btnPayload.includes("volver al menú")) {
+      await sendTemplateMessage(from, templates.SALUDO_OPCIONES);
+      return;
     }
   }
-}
 
-async function enviarPlantillaDesdeAPI({ from, url, templateName }) {
-  try {
-    const response = await fetch(url);
-    if (!response.ok) throw new Error(`Status ${response.status}`);
-    const data = await response.json();
-    let items = [];
-    if (data.menu) {
-      items = data.menu.map((e) => `${e.nombre} - $${e.precio}`);
-    } else if (data.ofertas) {
-      items = data.ofertas.map((e) => e.descripcion);
-    }
-    const textoFinal = items.join("\n");
-
-    const logsDir = path.join(__dirname, "logs");
-    if (!fs.existsSync(logsDir)) fs.mkdirSync(logsDir, { recursive: true });
-    const logEntry =
-      new Date().toISOString() +
-      " - Respuesta API " +
-      templateName +
-      ": " +
-      JSON.stringify(data) +
-      "\n";
-    fs.appendFileSync(path.join(logsDir, "api_log.txt"), logEntry);
-
-    if (textoFinal) {
-      await sendTemplateMessage(from, templateName, textoFinal);
+  // 3. Selección de marca por número
+  if (message.type === "text" && /^\d+$/.test(body.trim())) {
+    const cervezas = await getCervezas();
+    const idx = parseInt(body.trim(), 10) - 1;
+    if (idx >= 0 && idx < cervezas.length) {
+      const cerveza = cervezas[idx];
+      const presentaciones = await getPresentaciones(cerveza.id);
+      let nombre = cerveza.nombre;
+      let precios = presentaciones.map(p => `${p.volumen} $${p.precio}`).join(' | ');
+      console.log("Enviando a plantilla:", [nombre, precios]); // <-- Depuración
+      await sendTemplateMessage(from, templates.INFORMACION_PRODUCTO, [nombre, precios]);
+      await sendTemplateMessage(from, templates.CERVEZAS_O_INICIO);
+      return;
     } else {
-      await sendTextMessage(from, "No se pudo cargar el contenido.");
+      await sendTemplateMessage(from, templates.ERROR_GENERICO, ["Por favor, selecciona un número válido."]);
+      const lista = cervezas.map((c, i) => `${i + 1} - ${c.nombre}`).join(' | ');
+      await sendTemplateMessage(from, templates.MARCAS_CERVEZAS, [lista]);
+      return;
     }
-  } catch (error) {
-    const logsDir = path.join(__dirname, "logs");
-    if (!fs.existsSync(logsDir)) fs.mkdirSync(logsDir, { recursive: true });
-    const logEntry =
-      new Date().toISOString() +
-      " - Error API " +
-      templateName +
-      ": " +
-      error.message +
-      "\n";
-    fs.appendFileSync(path.join(logsDir, "api_log.txt"), logEntry);
-    await sendTextMessage(from, "No se pudo cargar el contenido.");
   }
+
+  // 4. Palabras clave para navegación rápida
+  if (body.includes("cerveza")) {
+    const cervezas = await getCervezas();
+    let lista = cervezas.map((c, i) => `${i + 1} - ${c.nombre}`).join(' | ');
+    await sendTemplateMessage(from, templates.MARCAS_CERVEZAS, [lista]);
+    return;
+  }
+  if (body.includes("promo")) {
+    const promos = await getPromociones();
+    await sendTemplateMessage(from, templates.PROMOCIONES, [promos.join(' | ')]);
+    return;
+  }
+  if (body.includes("horario")) {
+    const horarios = await getHorarios();
+    await sendTemplateMessage(from, templates.HORARIOS, [horarios.join(' | ')]);
+    return;
+  }
+  if (body.includes("inicio") || body.includes("menú")) {
+    await sendTemplateMessage(from, templates.SALUDO_OPCIONES);
+    return;
+  }
+
+  // 5. Mensaje libre/no reconocido
+  await sendTemplateMessage(from, templates.ERROR_GENERICO, ["No entendí tu mensaje. Usa el menú para navegar."]);
+  await sendTemplateMessage(from, templates.SALUDO_OPCIONES);
 }
+
 module.exports = handleIncomingMessage;

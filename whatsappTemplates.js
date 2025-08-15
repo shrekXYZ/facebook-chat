@@ -2,9 +2,12 @@ const axios = require("axios");
 const fs = require("fs");
 
 const templates = {
-  MENU_INICIO: "menu_inicio",
-  MENU_HOY: "menu_hoy",
-  CALCULO: "calculo",
+  SALUDO_OPCIONES: "saludo_opciones",
+  MARCAS_CERVEZAS: "marcas_cervezas",
+  INFORMACION_PRODUCTO: "informacion_producto",
+  CERVEZAS_O_INICIO: "cervezas_o_inicio",
+  PROMOCIONES: "promociones",
+  HORARIOS: "horarios",
   ERROR_GENERICO: "error_generico",
 };
 
@@ -15,8 +18,8 @@ function sanitize(text) {
 }
 
 // Token de acceso generado en la consola de Meta
-const accessToken = "EAAkkLSTJgmcBPHayuwO8z0hXiZB0vHO9im3jIc2VyabwfHICvDBdBimgMuhKDftOp4ZAJny5zM6ddPjnJVcKDr4rdZAc5fOWZCWBf3X4xt5DZCnhqyQgKroIaevbXpaBZBZAmXKtVDzLOFlAcZAifcAjX3Ko03IqdlalZBHIuRCyiJF7Ol6ZAXgTtKMsL0eHXvdI3b9zJliYLpWWgbdoS53kACZCEgwDGputMZBhToNwWPJ58qHM2otKBEBNstwMFXFILwZDZD ";
-const phoneNumberId = "Test1234";
+const accessToken = "EAAkkLSTJgmcBPFmRRUEGF6wro3AtLiFmPxsVQKPLdO5d2FJaLhuigRJGl8HpDUFweaaZBrUFPDZAVmZADKoCT10ANEy2n6z7jRF2tZCZBZC66CNg6EDJazQE7xAomczi4l14ZBY8ZAlu60GUKmV5zPAvJKpt3mZCfz0zPZCnwKVoa6ZBJ5eHFMUQGymJxMlc8FZBs7ZBBTxBoiQIyXG4qvdraZBbEkUjzSZA88CIuISBEPvxi1fWXrtkGPZAxpnKHucHT8zorEMZD";
+const phoneNumberId = "655831640955634";
 
 // Función para limpiar y validar el número
 function procesarNumero(to) {
@@ -54,15 +57,30 @@ async function enviarPayload(to, templateName, components = []) {
 }
 
 // Funciones específicas
-async function enviarPlantillaWhatsApp(to, templateName, text = "") {
-  const components = text
-    ? [
-        {
-          type: "body",
-          parameters: [{ type: "text", text: sanitize(text) }],
-        },
-      ]
-    : [];
+async function enviarPlantillaWhatsApp(to, templateName, params = {}) {
+  let components = [];
+  // Si params es un array, es para plantillas con solo body
+  if (Array.isArray(params)) {
+    if (params.length > 0) {
+      components.push({
+        type: "body",
+        parameters: params.map(text => ({ type: "text", text: String(text) })),
+      });
+    }
+  } else if (typeof params === "object" && (params.header || params.body)) {
+    if (params.header) {
+      components.push({
+        type: "header",
+        parameters: params.header.map(text => ({ type: "text", text: String(text) })),
+      });
+    }
+    if (params.body) {
+      components.push({
+        type: "body",
+        parameters: params.body.map(text => ({ type: "text", text: String(text) })),
+      });
+    }
+  }
   await enviarPayload(to, templateName, components);
 }
 
