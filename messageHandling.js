@@ -1,26 +1,24 @@
 const fs = require("fs");
-const path = require("path");
-const {
-  templates,
-  enviarPlantillaWhatsApp,
-  enviarPlantillaErrorGenerico,
-  enviarMensajeTexto,
-} = require("./whatsappTemplates");
+const { templates, enviarPlantillaWhatsApp } = require("./whatsappTemplates");
 const db = require("./db");
 
-// Aliases para mayor claridad
+// Alias
 const sendTemplateMessage = enviarPlantillaWhatsApp;
-const sendTextMessage = enviarMensajeTexto;
 
-// Funciones para obtener datos desde la base de datos
+// Mapa: messageId de Meta -> { to }
+const followUps = new Map();
+
+// --- Consultas BD ---
 async function getCervezas() {
-  const [rows] = await db.query("SELECT id, nombre FROM cervezas WHERE activo=1");
+  const [rows] = await db.query(
+    "SELECT id, nombre FROM cervezas WHERE activo=1 ORDER BY nombre"
+  );
   return rows;
 }
 
 async function getPresentaciones(cervezaId) {
   const [rows] = await db.query(
-    "SELECT volumen, precio FROM presentaciones WHERE cerveza_id=?",
+    "SELECT DISTINCT volumen, precio FROM presentaciones WHERE cerveza_id=? ORDER BY id",
     [cervezaId]
   );
   return rows;
@@ -28,126 +26,153 @@ async function getPresentaciones(cervezaId) {
 
 async function getPromociones() {
   const [rows] = await db.query("SELECT descripcion FROM promociones WHERE activa=1");
-  return rows.map(r => r.descripcion);
+  return rows.map((r) => r.descripcion);
 }
 
 async function getHorarios() {
   const [rows] = await db.query("SELECT dia, horario FROM horarios");
-  return rows.map(r => `${r.dia}: ${r.horario}`);
+  return rows.map((r) => `${r.dia}: ${r.horario}`);
 }
 
+// --- Mensajes entrantes ---
 async function handleIncomingMessage(payload) {
-  // Log de la solicitud entrante para depuración
   fs.appendFileSync(
     "debug_post_log.txt",
-    `${new Date().toISOString()} - POST Request: ${JSON.stringify(payload)}\n`
+    `${new Date().toISOString()} - POST: ${JSON.stringify(payload)}\n`
   );
 
-  // Validación básica de la estructura del payload
-  const firstEntry = payload.entry?.[0];
-  const firstChange = firstEntry?.changes?.[0];
-  const firstMessage = firstChange?.value?.messages?.[0];
+  const entry = payload.entry?.[0];
+  const change = entry?.changes?.[0];
+  const msg = change?.value?.messages?.[0];
+  if (!msg) return; // puede ser un status, no un mensaje
 
-  if (!firstMessage) {
-    console.log("Payload sin mensajes válidos");
-    return;
-  }
+  const from = msg.from;
+  const type = msg.type;
+  const body = msg.text?.body?.toLowerCase() || "";
 
-  const message = firstMessage;
-  console.log("📩 Mensaje recibido:", message);
-
-  if (!message.type) return;
-
-  const from = message.from;
-  const body = message.text?.body?.toLowerCase() || "";
-
-  // 1. Saludo inicial o palabras clave
-  const palabrasClaveSaludo = [
-    "hola", "hi", "buen día", "buenos días", "hello", "qué tal", "buenas tardes",
-    "buenas noches", "saludos", "hey", "cómo estás", "qué onda",
+  // 1) Saludo
+  const saludos = [
+    "hola","hi","buen día","buenos días","hello","qué tal",
+    "buenas tardes","buenas noches","saludos","hey","cómo estás","como estas","qué onda","que onda"
   ];
-  if (palabrasClaveSaludo.some((palabra) => body.includes(palabra))) {
+  if (type === "text" && saludos.some((s) => body.includes(s))) {
     await sendTemplateMessage(from, templates.SALUDO_OPCIONES);
     return;
   }
 
-  // 2. Botones del menú principal
-  if (message.type === "button" && message.button?.payload) {
-    const btnPayload = message.button.payload.toLowerCase();
-    if (btnPayload.includes("cervezas")) {
+  // 2) Botones
+  if (type === "button" && msg.button?.payload) {
+    const p = msg.button.payload.toLowerCase();
+
+    if (p.includes("cervezas")) {
       const cervezas = await getCervezas();
-      let lista = cervezas.map((c, i) => `${i + 1} - ${c.nombre}`).join(' | ');
+      const lista = cervezas.map((c,i)=>`${i+1} - ${c.nombre}`).join(" | ");
       await sendTemplateMessage(from, templates.MARCAS_CERVEZAS, [lista]);
       return;
     }
-    if (btnPayload.includes("promociones")) {
+    if (p.includes("promociones")) {
       const promos = await getPromociones();
-      await sendTemplateMessage(from, templates.PROMOCIONES, [promos.join(' | ')]);
+      await sendTemplateMessage(from, templates.PROMOCIONES, [promos.join(" | ")]);
       return;
     }
-    if (btnPayload.includes("horarios")) {
+    if (p.includes("horarios")) {
       const horarios = await getHorarios();
-      await sendTemplateMessage(from, templates.HORARIOS, [horarios.join(' | ')]);
+      await sendTemplateMessage(from, templates.HORARIOS, [horarios.join(" | ")]);
       return;
     }
-    if (btnPayload.includes("ver otra marca")) {
+    if (p.includes("ver otra marca")) {
       const cervezas = await getCervezas();
-      let lista = cervezas.map((c, i) => `${i + 1} - ${c.nombre}`).join(' | ');
+      const lista = cervezas.map((c,i)=>`${i+1} - ${c.nombre}`).join(" | ");
       await sendTemplateMessage(from, templates.MARCAS_CERVEZAS, [lista]);
       return;
     }
-    if (btnPayload.includes("volver al inicio") || btnPayload.includes("volver al menú")) {
+    if (p.includes("volver al inicio") || p.includes("volver al menú") || p.includes("volver al menu")) {
       await sendTemplateMessage(from, templates.SALUDO_OPCIONES);
       return;
     }
   }
 
-  // 3. Selección de marca por número
-  if (message.type === "text" && /^\d+$/.test(body.trim())) {
+  // 3) Selección por número
+  if (type === "text" && /^\d+$/.test(body.trim())) {
     const cervezas = await getCervezas();
     const idx = parseInt(body.trim(), 10) - 1;
+
     if (idx >= 0 && idx < cervezas.length) {
       const cerveza = cervezas[idx];
       const presentaciones = await getPresentaciones(cerveza.id);
-      let nombre = cerveza.nombre;
-      let precios = presentaciones.map(p => `${p.volumen} $${p.precio}`).join(' | ');
-      console.log("Enviando a plantilla:", [nombre, precios]); // <-- Depuración
-      await sendTemplateMessage(from, templates.INFORMACION_PRODUCTO, [nombre, precios]);
-      await sendTemplateMessage(from, templates.CERVEZAS_O_INICIO);
+
+      const precios = presentaciones.length
+        ? presentaciones.map(p => `${p.volumen} $${Number(p.precio).toFixed(2)}`).join(" | ")
+        : "Sin presentaciones disponibles";
+
+      // Enviar tarjeta de información y registrar follow-up por status
+      const resp = await sendTemplateMessage(from, templates.INFORMACION_PRODUCTO, {
+        header: [cerveza.nombre],          // HEADER {{1}}
+        body:   [cerveza.nombre, precios], // BODY   {{1}}, {{2}}
+      });
+
+      const sentId = resp?.messages?.[0]?.id;
+      if (sentId) followUps.set(sentId, { to: from });
       return;
     } else {
       await sendTemplateMessage(from, templates.ERROR_GENERICO, ["Por favor, selecciona un número válido."]);
-      const lista = cervezas.map((c, i) => `${i + 1} - ${c.nombre}`).join(' | ');
+      const lista = cervezas.map((c,i)=>`${i+1} - ${c.nombre}`).join(" | ");
       await sendTemplateMessage(from, templates.MARCAS_CERVEZAS, [lista]);
       return;
     }
   }
 
-  // 4. Palabras clave para navegación rápida
+  // 4) Navegación rápida
   if (body.includes("cerveza")) {
     const cervezas = await getCervezas();
-    let lista = cervezas.map((c, i) => `${i + 1} - ${c.nombre}`).join(' | ');
+    const lista = cervezas.map((c,i)=>`${i+1} - ${c.nombre}`).join(" | ");
     await sendTemplateMessage(from, templates.MARCAS_CERVEZAS, [lista]);
     return;
   }
   if (body.includes("promo")) {
     const promos = await getPromociones();
-    await sendTemplateMessage(from, templates.PROMOCIONES, [promos.join(' | ')]);
+    await sendTemplateMessage(from, templates.PROMOCIONES, [promos.join(" | ")]);
     return;
   }
   if (body.includes("horario")) {
     const horarios = await getHorarios();
-    await sendTemplateMessage(from, templates.HORARIOS, [horarios.join(' | ')]);
+    await sendTemplateMessage(from, templates.HORARIOS, [horarios.join(" | ")]);
     return;
   }
-  if (body.includes("inicio") || body.includes("menú")) {
+  if (body.includes("inicio") || body.includes("menú") || body.includes("menu")) {
     await sendTemplateMessage(from, templates.SALUDO_OPCIONES);
     return;
   }
 
-  // 5. Mensaje libre/no reconocido
+  // 5) Fallback
   await sendTemplateMessage(from, templates.ERROR_GENERICO, ["No entendí tu mensaje. Usa el menú para navegar."]);
   await sendTemplateMessage(from, templates.SALUDO_OPCIONES);
 }
 
-module.exports = handleIncomingMessage;
+// --- Status entrantes (para encadenar botones tras la tarjeta) ---
+async function handleStatusUpdate(payload) {
+  const entry = payload.entry?.[0];
+  const change = entry?.changes?.[0];
+  const statuses = change?.value?.statuses;
+  if (!Array.isArray(statuses)) return;
+
+  for (const st of statuses) {
+    const id = st.id;         // id del mensaje que enviamos
+    const status = st.status; // "sent" | "delivered" | "read" ...
+    const follow = followUps.get(id);
+
+    if (follow && (status === "sent" || status === "delivered")) {
+      followUps.delete(id);
+      try {
+        await sendTemplateMessage(follow.to, templates.CERVEZAS_O_INICIO);
+      } catch (e) {
+        console.error("Error enviando follow-up:", e?.response?.data || e.message);
+      }
+    }
+  }
+}
+
+module.exports = {
+  handleIncomingMessage,
+  handleStatusUpdate,
+};

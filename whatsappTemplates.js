@@ -11,23 +11,22 @@ const templates = {
   ERROR_GENERICO: "error_generico",
 };
 
-// Utilidad para limpiar texto y asegurar longitud
+// (opcional) utilidad si quieres sanear textos largos
 function sanitize(text) {
   const cleaned = text.replace(/[\n\t]+/g, " ").replace(/\s{2,}/g, " ").trim();
   return cleaned.slice(0, 1024);
 }
 
-// Token de acceso generado en la consola de Meta
+// ⚠️ Token y phoneNumberId reales de tu app
 const accessToken = "EAAkkLSTJgmcBPFmRRUEGF6wro3AtLiFmPxsVQKPLdO5d2FJaLhuigRJGl8HpDUFweaaZBrUFPDZAVmZADKoCT10ANEy2n6z7jRF2tZCZBZC66CNg6EDJazQE7xAomczi4l14ZBY8ZAlu60GUKmV5zPAvJKpt3mZCfz0zPZCnwKVoa6ZBJ5eHFMUQGymJxMlc8FZBs7ZBBTxBoiQIyXG4qvdraZBbEkUjzSZA88CIuISBEPvxi1fWXrtkGPZAxpnKHucHT8zorEMZD";
 const phoneNumberId = "655831640955634";
 
-// Función para limpiar y validar el número
 function procesarNumero(to) {
   if (!to) throw new Error("Número de destinatario no válido");
   return to.startsWith("521") ? to.replace(/^521/, "52") : to;
 }
- 
-// Función genérica para construir y enviar payloads
+
+// ---------------- Core de envío ----------------
 async function enviarPayload(to, templateName, components = []) {
   const url = `https://graph.facebook.com/v23.0/${phoneNumberId}/messages`;
   to = procesarNumero(to);
@@ -36,11 +35,7 @@ async function enviarPayload(to, templateName, components = []) {
     messaging_product: "whatsapp",
     to,
     type: "template",
-    template: {
-      name: templateName,
-      language: { code: "es_MX" },
-      components,
-    },
+    template: { name: templateName, language: { code: "es_MX" }, components },
   };
 
   const headers = {
@@ -51,47 +46,47 @@ async function enviarPayload(to, templateName, components = []) {
   try {
     const response = await axios.post(url, payload, { headers });
     logExitoso(payload, response.data);
+    return response.data;              // <-- IMPORTANTE: devolver message_id
   } catch (error) {
     logError(payload, error);
+    throw error;                       // propagar para que el caller lo maneje
   }
 }
 
-// Funciones específicas
+// Envío de plantilla con params (header/body o solo body)
 async function enviarPlantillaWhatsApp(to, templateName, params = {}) {
-  let components = [];
-  // Si params es un array, es para plantillas con solo body
+  const components = [];
+
   if (Array.isArray(params)) {
     if (params.length > 0) {
       components.push({
         type: "body",
-        parameters: params.map(text => ({ type: "text", text: String(text) })),
+        parameters: params.map((text) => ({ type: "text", text: String(text) })),
       });
     }
   } else if (typeof params === "object" && (params.header || params.body)) {
-    if (params.header) {
+    if (params.header && params.header.length) {
       components.push({
         type: "header",
-        parameters: params.header.map(text => ({ type: "text", text: String(text) })),
+        parameters: params.header.map((text) => ({ type: "text", text: String(text) })),
       });
     }
-    if (params.body) {
+    if (params.body && params.body.length) {
       components.push({
         type: "body",
-        parameters: params.body.map(text => ({ type: "text", text: String(text) })),
+        parameters: params.body.map((text) => ({ type: "text", text: String(text) })),
       });
     }
   }
-  await enviarPayload(to, templateName, components);
+
+  return await enviarPayload(to, templateName, components); // <-- devolver data
 }
 
 async function enviarPlantillaErrorGenerico(to, errorMessage) {
   const components = [
-    {
-      type: "body",
-      parameters: [{ type: "text", text: errorMessage }],
-    },
+    { type: "body", parameters: [{ type: "text", text: errorMessage }] },
   ];
-  await enviarPayload(to, templates.ERROR_GENERICO, components);
+  return await enviarPayload(to, templates.ERROR_GENERICO, components);
 }
 
 async function enviarMensajeTexto(to, text) {
@@ -102,7 +97,6 @@ async function enviarMensajeTexto(to, text) {
     type: "text",
     text: { body: text },
   };
-
   const headers = {
     Authorization: `Bearer ${accessToken}`,
     "Content-Type": "application/json",
@@ -111,21 +105,27 @@ async function enviarMensajeTexto(to, text) {
   try {
     const response = await axios.post(url, payload, { headers });
     logExitoso(payload, response.data);
+    return response.data;              // opcional pero útil para debug
   } catch (error) {
     logError(payload, error);
+    throw error;
   }
 }
 
-// Funciones auxiliares para logging
+// ---------------- Logs ----------------
 function logExitoso(payload, responseData) {
-  const logMessage = `${new Date().toISOString()} - Enviado: ${JSON.stringify(payload)}\nRespuesta: ${JSON.stringify(responseData)}\n`;
+  const logMessage =
+    `${new Date().toISOString()} - Enviado: ${JSON.stringify(payload)}\n` +
+    `Respuesta: ${JSON.stringify(responseData)}\n`;
   fs.appendFileSync("template_log.txt", logMessage);
   console.log("Plantilla enviada exitosamente:", responseData);
 }
 
 function logError(payload, error) {
   const errorData = error.response?.data || error.message;
-  const logMessage = `${new Date().toISOString()} - Error enviando: ${JSON.stringify(payload)}\nError: ${JSON.stringify(errorData)}\n`;
+  const logMessage =
+    `${new Date().toISOString()} - Error enviando: ${JSON.stringify(payload)}\n` +
+    `Error: ${JSON.stringify(errorData)}\n`;
   fs.appendFileSync("template_log.txt", logMessage);
   console.error("Error enviando plantilla:", errorData);
 }
