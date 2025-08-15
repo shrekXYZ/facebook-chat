@@ -8,7 +8,7 @@ const sendTemplateMessage = enviarPlantillaWhatsApp;
 // Mapa: messageId de Meta -> { to }
 const followUps = new Map();
 
-// --- Consultas BD ---
+// --- Consultas BD (se mantienen por si después haces plantillas dinámicas) ---
 async function getCervezas() {
   const [rows] = await db.query(
     "SELECT id, nombre FROM cervezas WHERE activo=1 ORDER BY nombre"
@@ -67,25 +67,29 @@ async function handleIncomingMessage(payload) {
     if (p.includes("cervezas")) {
       const cervezas = await getCervezas();
       const lista = cervezas.map((c,i)=>`${i+1} - ${c.nombre}`).join(" | ");
-      await sendTemplateMessage(from, templates.MARCAS_CERVEZAS, [lista]);
+      await sendTemplateMessage(from, templates.MARCAS_CERVEZAS, [lista]); // esta SÍ lleva 1 parámetro
       return;
     }
+
     if (p.includes("promociones")) {
-      const promos = await getPromociones();
-      await sendTemplateMessage(from, templates.PROMOCIONES, [promos.join(" | ")]);
+      // Plantilla ESTÁTICA: NO mandar params
+      await sendTemplateMessage(from, templates.PROMOCIONES);
       return;
     }
+
     if (p.includes("horarios")) {
-      const horarios = await getHorarios();
-      await sendTemplateMessage(from, templates.HORARIOS, [horarios.join(" | ")]);
+      // Plantilla ESTÁTICA: NO mandar params
+      await sendTemplateMessage(from, templates.HORARIOS);
       return;
     }
+
     if (p.includes("ver otra marca")) {
       const cervezas = await getCervezas();
       const lista = cervezas.map((c,i)=>`${i+1} - ${c.nombre}`).join(" | ");
       await sendTemplateMessage(from, templates.MARCAS_CERVEZAS, [lista]);
       return;
     }
+
     if (p.includes("volver al inicio") || p.includes("volver al menú") || p.includes("volver al menu")) {
       await sendTemplateMessage(from, templates.SALUDO_OPCIONES);
       return;
@@ -122,23 +126,26 @@ async function handleIncomingMessage(payload) {
     }
   }
 
-  // 4) Navegación rápida
+  // 4) Navegación rápida por texto
   if (body.includes("cerveza")) {
     const cervezas = await getCervezas();
     const lista = cervezas.map((c,i)=>`${i+1} - ${c.nombre}`).join(" | ");
     await sendTemplateMessage(from, templates.MARCAS_CERVEZAS, [lista]);
     return;
   }
+
   if (body.includes("promo")) {
-    const promos = await getPromociones();
-    await sendTemplateMessage(from, templates.PROMOCIONES, [promos.join(" | ")]);
+    // ESTÁTICA: sin params
+    await sendTemplateMessage(from, templates.PROMOCIONES);
     return;
   }
+
   if (body.includes("horario")) {
-    const horarios = await getHorarios();
-    await sendTemplateMessage(from, templates.HORARIOS, [horarios.join(" | ")]);
+    // ESTÁTICA: sin params
+    await sendTemplateMessage(from, templates.HORARIOS);
     return;
   }
+
   if (body.includes("inicio") || body.includes("menú") || body.includes("menu")) {
     await sendTemplateMessage(from, templates.SALUDO_OPCIONES);
     return;
